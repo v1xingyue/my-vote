@@ -1,15 +1,8 @@
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useEffect, useState } from "react";
-import CreateVoteForm from "../components/CreateVoteForm";
 import VoteCard from "../components/VoteCard";
-import { Program } from "@project-serum/anchor";
 import dynamic from "next/dynamic";
-import { Connection } from "@solana/web3.js";
 import { VoteProgram } from "../utils/program";
-import { Transaction } from "@solana/web3.js";
-import type { WalletContextState } from "@solana/wallet-adapter-react";
-import { Wallet } from "@project-serum/anchor";
 import { PublicKey } from "@solana/web3.js";
 import CreateVoteDialog from "../components/CreateVoteDialog";
 
@@ -32,7 +25,7 @@ export interface VoteCardData {
 }
 
 export default function Home() {
-  const wallet = useWallet() as WalletContextState;
+  const wallet = useWallet();
   const { connection } = useConnection();
   const [voteCards, setVoteCards] = useState<VoteCardData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +63,6 @@ export default function Home() {
             networkName = "Testnet";
             break;
         }
-
         setNetwork(networkName);
       } catch (error) {
         console.error("Error getting network:", error);

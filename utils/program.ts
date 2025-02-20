@@ -5,15 +5,6 @@ import { SOLANA_RPC_ENDPOINT } from "../config/constants";
 
 const programID = new PublicKey("6RcLuYsYfmbfbwkd1bDeFy2MpnU3fUg4NMmWmx5Dy3bE");
 
-interface VoteCardAccount {
-  data: number[] | string; // base64 encoded data
-  executable: boolean;
-  lamports: number;
-  owner: string;
-  rentEpoch: number;
-  space: number;
-}
-
 export class VoteProgram {
   static async createVoteCard(
     wallet: Wallet,

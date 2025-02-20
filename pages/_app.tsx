@@ -11,17 +11,8 @@ import {
 import { clusterApiUrl } from "@solana/web3.js";
 import { useMemo } from "react";
 import "@solana/wallet-adapter-react-ui/styles.css";
-import dynamic from "next/dynamic";
 import "../styles/globals.css";
 import type { AppProps } from "next/app";
-
-// 动态导入 WalletConnectionProvider 组件
-const WalletConnectionProvider = dynamic(
-  () => import("../components/WalletConnectionProvider"),
-  {
-    ssr: false,
-  }
-);
 
 export default function MyApp({ Component, pageProps }: AppProps) {
   // 可以根据需要更改网络
