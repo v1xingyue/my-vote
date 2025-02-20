@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import { Connection } from "@solana/web3.js";
 import { VoteProgram } from "../utils/program";
 import { Transaction } from "@solana/web3.js";
-import { WalletContextState } from "@solana/wallet-adapter-react";
+import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { Wallet } from "@project-serum/anchor";
 import { PublicKey } from "@solana/web3.js";
 import CreateVoteDialog from "../components/CreateVoteDialog";
@@ -32,13 +32,15 @@ export interface VoteCardData {
 }
 
 export default function Home() {
-  const { wallet } = useWallet();
+  const wallet = useWallet() as WalletContextState;
   const { connection } = useConnection();
   const [voteCards, setVoteCards] = useState<VoteCardData[]>([]);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [network, setNetwork] = useState<string>("未连接");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isInitialized, setIsInitialized] = useState<boolean | null>(null);
+  const [isInitializing, setIsInitializing] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -79,18 +81,31 @@ export default function Home() {
     getNetworkName();
   }, [connection]);
 
+  // 检查程序初始化状态
+  useEffect(() => {
+    const checkInitialization = async () => {
+      try {
+        const initialized = await VoteProgram.checkProgramInitialized(
+          connection
+        );
+        setIsInitialized(initialized);
+      } catch (error) {
+        console.error("Failed to check program initialization:", error);
+        setIsInitialized(false);
+      }
+    };
+
+    checkInitialization();
+  }, [connection]);
+
   const fetchVoteCards = async () => {
-    if (!wallet?.adapter?.publicKey) return;
+    if (!wallet?.publicKey) return;
     setLoading(true);
     try {
-      const walletAdapter: Wallet = {
-        publicKey: wallet.adapter.publicKey,
-        signTransaction: async (tx: Transaction) => {
-          return tx;
-        },
-        signAllTransactions: async (txs: Transaction[]) => {
-          return txs;
-        },
+      const walletAdapter = {
+        publicKey: wallet.publicKey,
+        signTransaction: wallet.signTransaction,
+        signAllTransactions: wallet.signAllTransactions,
         payer: null as any,
       };
 
@@ -108,12 +123,39 @@ export default function Home() {
 
   // 确保在钱包连接状态改变时重新获取数据
   useEffect(() => {
-    if (wallet?.adapter?.connected) {
+    if (wallet?.publicKey) {
       fetchVoteCards();
     } else {
       setVoteCards([]); // 清空列表当钱包断开连接
     }
-  }, [wallet?.adapter?.connected]);
+  }, [wallet?.publicKey]);
+
+  // 初始化程序
+  const handleInitialize = async () => {
+    if (!wallet?.publicKey) {
+      alert("请先连接钱包");
+      return;
+    }
+
+    try {
+      setIsInitializing(true);
+      const walletAdapter = {
+        publicKey: wallet.publicKey,
+        signTransaction: wallet.signTransaction,
+        signAllTransactions: wallet.signAllTransactions,
+        payer: null as any,
+      };
+
+      const tx = await VoteProgram.initializeProgram(walletAdapter);
+      console.log("Program initialized successfully:", tx);
+      setIsInitialized(true);
+    } catch (error) {
+      console.error("Failed to initialize program:", error);
+      alert("初始化程序失败");
+    } finally {
+      setIsInitializing(false);
+    }
+  };
 
   // 在客户端渲染之前不显示任何内容
   if (!mounted) {
@@ -173,11 +215,37 @@ export default function Home() {
           }}
         />
 
-        {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+        {/* 初始化状态检查中 */}
+        {isInitialized === null && (
+          <div className="text-center">
+            <p>检查程序状态中...</p>
           </div>
-        ) : (
+        )}
+
+        {/* 未初始化时显示初始化按钮 */}
+        {isInitialized === false && (
+          <div className="text-center p-4 bg-yellow-100 rounded-lg">
+            <p className="mb-4">程序尚未初始化</p>
+            <button
+              onClick={handleInitialize}
+              disabled={!wallet?.publicKey || isInitializing}
+              className={`
+                px-4 py-2 rounded-lg
+                ${
+                  isInitializing
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-blue-500 hover:bg-blue-600"
+                }
+                text-white font-semibold
+              `}
+            >
+              {isInitializing ? "初始化中..." : "初始化程序"}
+            </button>
+          </div>
+        )}
+
+        {/* 程序已初始化，显示正常内容 */}
+        {isInitialized === true && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {Array.isArray(voteCards) &&
               voteCards.map((card: VoteCardData) => (
