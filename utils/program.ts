@@ -282,11 +282,13 @@ export class VoteProgram {
 
       const program = new Program(idl as any, programID, provider);
 
-      // 获取管理员账户
-      const adminAccount = await program.account.programAdmin.fetch(
+      // 获取管理员账户并正确类型转换
+      const adminAccount = (await program.account.programAdmin.fetch(
         programAdminPDA
-      );
-      return adminAccount.isInitialized;
+      )) as any;
+
+      // 检查账户是否存在并已初始化
+      return adminAccount && adminAccount.isInitialized === true;
     } catch (error) {
       console.log("Program not initialized:", error);
       return false;
