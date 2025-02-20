@@ -7,31 +7,69 @@ declare_id!("your_program_id");
 pub mod vote_program {
     use super::*;
 
+    // 添加程序初始化指令
+    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let program_admin = &mut ctx.accounts.program_admin;
+        program_admin.admin = ctx.accounts.admin.key();
+        program_admin.is_initialized = true;
+        program_admin.create_vote_fee = 10_000_000; // 0.01 SOL
+        program_admin.cast_vote_fee = 1_000_000; // 0.001 SOL
+        program_admin.fee_receiver = ctx.accounts.admin.key(); // 默认费用接收者为管理员
+        program_admin.admin_fee_percent = 10; // 默认10%分成给管理员
+
+        msg!(
+            "Program initialized with admin: {}, fee receiver: {}",
+            ctx.accounts.admin.key(),
+            ctx.accounts.admin.key()
+        );
+        Ok(())
+    }
+
     // 创建新的投票卡片
     pub fn create_vote_card(
         ctx: Context<CreateVoteCard>,
         title: String,
         description: String,
     ) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
         let vote_card = &mut ctx.accounts.vote_card;
         let author = &ctx.accounts.author;
         let system_program = &ctx.accounts.system_program;
+        let program_admin = &ctx.accounts.program_admin;
 
         // 检查标题长度
         require!(title.len() <= 50, VoteError::TitleTooLong);
         // 检查描述长度
         require!(description.len() <= 280, VoteError::DescriptionTooLong);
 
-        // 收取 0.01 SOL 费用
-        let fee_amount = 10_000_000; // 0.01 SOL = 10,000,000 Lamports
-        let fee_instruction = system_instruction::transfer(
-            &author.key(),
-            &vote_card.key(), // 费用转入投票账户
-            fee_amount,
-        );
+        let fee_amount = program_admin.create_vote_fee;
+        let admin_fee = (fee_amount as u128 * program_admin.admin_fee_percent as u128 / 100) as u64;
+        let vote_card_fee = fee_amount - admin_fee;
+
+        // 转账给费用接收者
+        let admin_fee_ix =
+            system_instruction::transfer(&author.key(), &program_admin.fee_receiver, admin_fee);
+
+        // 转账给投票卡片账户
+        let vote_card_fee_ix =
+            system_instruction::transfer(&author.key(), &vote_card.key(), vote_card_fee);
 
         invoke(
-            &fee_instruction,
+            &admin_fee_ix,
+            &[
+                author.to_account_info(),
+                ctx.accounts.fee_receiver.to_account_info(),
+                system_program.to_account_info(),
+            ],
+        )?;
+
+        invoke(
+            &vote_card_fee_ix,
             &[
                 author.to_account_info(),
                 vote_card.to_account_info(),
@@ -51,20 +89,24 @@ pub mod vote_program {
 
     // 投票功能
     pub fn cast_vote(ctx: Context<CastVote>) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
         let vote_card = &mut ctx.accounts.vote_card;
         let voter = &ctx.accounts.voter;
         let system_program = &ctx.accounts.system_program;
+        let program_admin = &ctx.accounts.program_admin;
 
         // 检查是否已经投票
         require!(!vote_card.has_voted(voter.key()), VoteError::AlreadyVoted);
 
-        // 收取 0.001 SOL 费用
-        let fee_amount = 1_000_000; // 0.001 SOL = 1,000,000 Lamports
-        let fee_instruction = system_instruction::transfer(
-            &voter.key(),
-            &vote_card.key(), // 费用转入投票账户
-            fee_amount,
-        );
+        // 使用配置的费用
+        let fee_amount = program_admin.cast_vote_fee;
+        let fee_instruction =
+            system_instruction::transfer(&voter.key(), &vote_card.key(), fee_amount);
 
         invoke(
             &fee_instruction,
@@ -82,14 +124,21 @@ pub mod vote_program {
 
     // 取消投票功能
     pub fn unvote(ctx: Context<Unvote>) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
         let vote_card = &mut ctx.accounts.vote_card;
         let voter = &ctx.accounts.voter;
+        let program_admin = &ctx.accounts.program_admin;
 
         // 检查是否已经投票
         require!(vote_card.has_voted(voter.key()), VoteError::HasNotVoted);
 
-        // 返还 0.001 SOL
-        let refund_amount = 1_000_000; // 0.001 SOL = 1,000,000 Lamports
+        // 返还投票费用
+        let refund_amount = program_admin.cast_vote_fee;
 
         // 从投票账户转回到投票者账户
         **vote_card.to_account_info().try_borrow_mut_lamports()? = vote_card
@@ -109,10 +158,121 @@ pub mod vote_program {
         Ok(())
     }
 
-    // 删除投票卡片功能
-    pub fn remove_card(_ctx: Context<RemoveCard>) -> Result<()> {
-        // Anchor 的 close constraint 会自动处理账户关闭和 lamports 转移
+    // 添加管理员删除卡片功能
+    pub fn admin_remove_card(ctx: Context<AdminRemoveCard>) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
+        let admin = &ctx.accounts.admin;
+
+        // 验证管理员身份
+        require!(
+            admin.key() == ctx.accounts.program_admin.key(),
+            VoteError::UnauthorizedAdmin
+        );
+
+        // Anchor的close constraint会自动处理账户关闭和lamports转移到作者账户
         Ok(())
+    }
+
+    // 转移管理员权限
+    pub fn transfer_admin(ctx: Context<TransferAdmin>) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
+        let program_admin = &mut ctx.accounts.program_admin;
+        let current_admin = &ctx.accounts.current_admin;
+        let new_admin = &ctx.accounts.new_admin;
+
+        // 验证当前管理员
+        require!(
+            current_admin.key() == program_admin.admin,
+            VoteError::UnauthorizedAdmin
+        );
+
+        // 更新管理员
+        program_admin.admin = new_admin.key();
+
+        msg!(
+            "Admin transferred from {} to {}",
+            current_admin.key(),
+            new_admin.key()
+        );
+
+        Ok(())
+    }
+
+    // 添加配置参数结构体
+    #[derive(AnchorSerialize, AnchorDeserialize)]
+    pub struct FeeConfig {
+        pub create_vote_fee: Option<u64>,  // 创建投票费用
+        pub cast_vote_fee: Option<u64>,    // 投票费用
+        pub fee_receiver: Option<Pubkey>,  // 费用接收账户
+        pub admin_fee_percent: Option<u8>, // 管理员分成比例
+    }
+
+    // 统一的配置更新方法
+    pub fn update_program_config(
+        ctx: Context<UpdateProgramConfig>,
+        config: FeeConfig,
+    ) -> Result<()> {
+        // 检查程序是否已初始化
+        require!(
+            ctx.accounts.program_admin.is_initialized(),
+            VoteError::ProgramNotInitialized
+        );
+
+        let program_admin = &mut ctx.accounts.program_admin;
+        let admin = &ctx.accounts.admin;
+
+        // 验证管理员身份
+        require!(
+            admin.key() == program_admin.admin,
+            VoteError::UnauthorizedAdmin
+        );
+
+        // 更新创建投票费用
+        if let Some(new_create_fee) = config.create_vote_fee {
+            program_admin.create_vote_fee = new_create_fee;
+            msg!("Create vote fee updated to: {} lamports", new_create_fee);
+        }
+
+        // 更新投票费用
+        if let Some(new_cast_fee) = config.cast_vote_fee {
+            program_admin.cast_vote_fee = new_cast_fee;
+            msg!("Cast vote fee updated to: {} lamports", new_cast_fee);
+        }
+
+        // 更新费用接收账户
+        if let Some(new_receiver) = config.fee_receiver {
+            program_admin.fee_receiver = new_receiver;
+            msg!("Fee receiver updated to: {}", new_receiver);
+        }
+
+        // 更新管理员分成比例
+        if let Some(new_percent) = config.admin_fee_percent {
+            require!(new_percent <= 100, VoteError::InvalidFeePercent);
+            program_admin.admin_fee_percent = new_percent;
+            msg!("Admin fee percent updated to: {}%", new_percent);
+        }
+
+        Ok(())
+    }
+
+    // 更新Context结构
+    #[derive(Accounts)]
+    pub struct UpdateProgramConfig<'info> {
+        #[account(mut)]
+        pub program_admin: Account<'info, ProgramAdmin>,
+
+        #[account(mut)]
+        pub admin: Signer<'info>,
     }
 }
 
@@ -131,6 +291,17 @@ pub struct CreateVoteCard<'info> {
     #[account(mut)]
     pub author: Signer<'info>,
     pub system_program: Program<'info, System>,
+
+    /// 程序管理员账户，用于验证程序初始化状态
+    #[account(
+        seeds = [b"program-admin"],
+        bump
+    )]
+    pub program_admin: Account<'info, ProgramAdmin>,
+
+    /// 费用接收账户
+    #[account(mut)]
+    pub fee_receiver: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -140,6 +311,12 @@ pub struct CastVote<'info> {
     #[account(mut)]
     pub voter: Signer<'info>,
     pub system_program: Program<'info, System>,
+
+    #[account(
+        seeds = [b"program-admin"],
+        bump
+    )]
+    pub program_admin: Account<'info, ProgramAdmin>,
 }
 
 #[derive(Accounts)]
@@ -149,18 +326,66 @@ pub struct Unvote<'info> {
     #[account(mut)]
     pub voter: Signer<'info>,
     pub system_program: Program<'info, System>,
+
+    #[account(
+        seeds = [b"program-admin"],
+        bump
+    )]
+    pub program_admin: Account<'info, ProgramAdmin>,
 }
 
 #[derive(Accounts)]
-pub struct RemoveCard<'info> {
+pub struct AdminRemoveCard<'info> {
     #[account(
         mut,
-        has_one = author,
-        close = author  // Anchor 的 close constraint
+        close = author // 关闭账户时资金返回给原作者
     )]
     pub vote_card: Account<'info, VoteCard>,
+
+    /// 原作者账户，用于接收返还的资金
     #[account(mut)]
-    pub author: Signer<'info>,
+    pub author: AccountInfo<'info>,
+
+    /// 管理员账户，必须签名
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// 程序管理员账户，用于验证管理员身份
+    #[account(
+        seeds = [b"program-admin"],
+        bump
+    )]
+    pub program_admin: Account<'info, ProgramAdmin>,
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = admin,
+        space = ProgramAdmin::LEN,
+        seeds = [b"program-admin"],
+        bump
+    )]
+    pub program_admin: Account<'info, ProgramAdmin>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct TransferAdmin<'info> {
+    #[account(mut)]
+    pub program_admin: Account<'info, ProgramAdmin>,
+
+    /// 当前管理员，必须签名
+    #[account(mut)]
+    pub current_admin: Signer<'info>,
+
+    /// 新管理员账户
+    pub new_admin: AccountInfo<'info>,
 }
 
 #[account]
@@ -196,6 +421,31 @@ impl VoteCard {
     }
 }
 
+// 添加管理员账户结构
+#[account]
+pub struct ProgramAdmin {
+    pub admin: Pubkey,
+    pub is_initialized: bool,
+    pub create_vote_fee: u64,  // lamports
+    pub cast_vote_fee: u64,    // lamports
+    pub fee_receiver: Pubkey,  // 费用接收账户
+    pub admin_fee_percent: u8, // 管理员分成比例 (0-100)
+}
+
+impl ProgramAdmin {
+    const LEN: usize = 8 +    // discriminator
+        32 +                  // admin pubkey
+        1 +                   // is_initialized bool
+        8 +                   // create_vote_fee
+        8 +                   // cast_vote_fee
+        32 +                  // fee_receiver
+        1; // admin_fee_percent
+
+    pub fn is_initialized(&self) -> bool {
+        self.is_initialized
+    }
+}
+
 #[error_code]
 pub enum VoteError {
     #[msg("标题长度不能超过50个字符")]
@@ -212,4 +462,12 @@ pub enum VoteError {
     InsufficientBalance,
     #[msg("退款失败")]
     RefundFailed,
+    #[msg("未授权的管理员操作")]
+    UnauthorizedAdmin,
+    #[msg("管理员转移失败")]
+    AdminTransferFailed,
+    #[msg("程序尚未初始化")]
+    ProgramNotInitialized,
+    #[msg("无效的费率百分比")]
+    InvalidFeePercent,
 }

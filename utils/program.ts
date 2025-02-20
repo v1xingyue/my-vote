@@ -3,7 +3,7 @@ import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import idl from "../idl.json";
 import { SOLANA_RPC_ENDPOINT } from "../config/constants";
 
-const programID = new PublicKey("HpCD3a3oLppiu3C9hGDQreu89UdXitwxgNS7iX2sZM1x");
+const programID = new PublicKey("6RcLuYsYfmbfbwkd1bDeFy2MpnU3fUg4NMmWmx5Dy3bE");
 
 interface VoteCardAccount {
   data: number[] | string; // base64 encoded data
